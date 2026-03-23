@@ -1,0 +1,9 @@
+.env
+db-structure.md
+node_modules/
+dist/
+.env.test
+*.log
+drizzle/
+.DS_Store
+folder-structure.md
