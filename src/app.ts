@@ -8,6 +8,9 @@ import { sendSuccess } from './utils/response';
 import { NotFoundError } from './errors';
 import authRoutes from './modules/auth/auth.routes';
 import profileRoutes from './modules/profile/profile.routes';
+import walletRoutes from './modules/wallet/wallet.routes';
+import adminRoutes from './modules/admin/admin.routes';
+import shopRoutes from './modules/shop/shop.routes';
 const app = express();
 
 // ─── Global middleware ────────────────────────────────────
@@ -34,6 +37,9 @@ app.get('/api/health', (_req, res) => {
 // ─── Routes will be mounted here in later steps ──────────
 app.use('/api/auth', authRoutes);
 app.use('/api/profile', profileRoutes);
+app.use('/api/wallet', walletRoutes);
+app.use('/api/admin', adminRoutes);
+app.use('/api/barber', shopRoutes);
 
 // ─── 404 catch-all ────────────────────────────────────────
 app.use((_req, _res, next) => {

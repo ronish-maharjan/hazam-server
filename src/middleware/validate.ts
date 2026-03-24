@@ -1,6 +1,6 @@
 import type { ZodSchema } from 'zod';
 import type { Request, Response, NextFunction } from 'express';
-import { ValidationError } from '../errors';
+import { ValidationError } from '../errors/index';
 
 /**
  * Validates req.body against the given Zod schema.
@@ -39,8 +39,28 @@ export function validateQuery(schema: ZodSchema) {
       throw new ValidationError(errors);
     }
 
-    // Safe to cast — downstream handlers access via validated types
     req.query = result.data as typeof req.query;
+    next();
+  };
+}
+
+/**
+ * Validates req.params against the given Zod schema.
+ * Stores parsed output back on req.params for downstream handlers.
+ */
+export function validateParams(schema: ZodSchema) {
+  return (req: Request, _res: Response, next: NextFunction): void => {
+    const result = schema.safeParse(req.params);
+
+    if (!result.success) {
+      const errors = result.error.issues.map((issue) => ({
+        field: issue.path.join('.'),
+        message: issue.message,
+      }));
+      throw new ValidationError(errors);
+    }
+
+    req.params = result.data as typeof req.params;
     next();
   };
 }
