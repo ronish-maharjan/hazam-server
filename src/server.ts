@@ -33,10 +33,26 @@ async function bootstrap(): Promise<void> {
       }
       process.exit(0);
     });
+
+    // Force exit after 10 seconds if graceful shutdown fails
+    setTimeout(() => {
+      logger.error('Forced shutdown after timeout');
+      process.exit(1);
+    }, 10000);
   };
 
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
+
+  // ─── Unhandled errors ──────────────────────────────────
+  process.on('unhandledRejection', (reason) => {
+    logger.error({ reason }, 'Unhandled promise rejection');
+  });
+
+  process.on('uncaughtException', (error) => {
+    logger.error({ error }, 'Uncaught exception');
+    shutdown('uncaughtException');
+  });
 }
 
 bootstrap();

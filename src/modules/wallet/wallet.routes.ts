@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { strictRateLimiter } from '../../middleware/rate-limit';
 import { validate, validateQuery } from '../../middleware/validate';
 import { requireAuth } from '../../middleware/require-auth';
 import { requireVerified } from '../../middleware/require-verified';
@@ -49,6 +50,7 @@ router.post(
   requireVerified,
   requireCompleteProfile,
   requireRole(USER_ROLES.CUSTOMER),
+  strictRateLimiter,
   validate(redeemCouponSchema),
   async (req, res) => {
     const data = await redeemCoupon(req.user!.id, req.body);

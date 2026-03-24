@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { loginRateLimiter, strictRateLimiter } from '../../middleware/rate-limit';
 import { validate, validateQuery } from '../../middleware/validate';
 import {
   registerSchema,
@@ -61,12 +62,14 @@ router.post(
 // ─── Login ────────────────────────────────────────────────
 router.post(
   '/login',
+  loginRateLimiter,
   validate(loginSchema),
   async (req, res) => {
     const data = await login(req.body);
     sendSuccess(res, data, 'Login successful');
   },
 );
+
 
 // ─── Refresh Token ────────────────────────────────────────
 router.post(
@@ -91,6 +94,7 @@ router.post(
 // ─── Forgot Password ─────────────────────────────────────
 router.post(
   '/forgot-password',
+  strictRateLimiter,
   validate(forgotPasswordSchema),
   async (req, res) => {
     const data = await forgotPassword(req.body);
