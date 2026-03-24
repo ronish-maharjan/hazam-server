@@ -11,6 +11,8 @@ import profileRoutes from './modules/profile/profile.routes';
 import walletRoutes from './modules/wallet/wallet.routes';
 import adminRoutes from './modules/admin/admin.routes';
 import shopRoutes from './modules/shop/shop.routes';
+import discoveryRoutes from './modules/discovery/discovery.routes';
+
 const app = express();
 
 // ─── Global middleware ────────────────────────────────────
@@ -40,7 +42,7 @@ app.use('/api/profile', profileRoutes);
 app.use('/api/wallet', walletRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/barber', shopRoutes);
-
+app.use('/api/shops', discoveryRoutes);
 // ─── 404 catch-all ────────────────────────────────────────
 app.use((_req, _res, next) => {
   next(new NotFoundError('Route not found'));
