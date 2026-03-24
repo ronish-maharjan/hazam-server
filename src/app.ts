@@ -6,7 +6,8 @@ import { env } from './config/env';
 import { errorHandler } from './middleware/error-handler';
 import { sendSuccess } from './utils/response';
 import { NotFoundError } from './errors';
-
+import authRoutes from './modules/auth/auth.routes';
+import profileRoutes from './modules/profile/profile.routes';
 const app = express();
 
 // ─── Global middleware ────────────────────────────────────
@@ -31,6 +32,8 @@ app.get('/api/health', (_req, res) => {
 });
 
 // ─── Routes will be mounted here in later steps ──────────
+app.use('/api/auth', authRoutes);
+app.use('/api/profile', profileRoutes);
 
 // ─── 404 catch-all ────────────────────────────────────────
 app.use((_req, _res, next) => {
