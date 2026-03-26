@@ -191,9 +191,9 @@ export async function createBooking(
         }
 
         // 5. Double-booking prevention with capacity check
-        // Lock existing bookings for this slot to prevent concurrent inserts
+        // Lock overlapping booking rows to prevent concurrent inserts
         const overlapResult = await client.query(
-            `SELECT COUNT(*)::int as count
+            `SELECT id
             FROM bookings
             WHERE shop_id = $1
             AND appointment_date = $2
@@ -204,7 +204,7 @@ export async function createBooking(
                 [input.shopId, input.appointmentDate, endTime, input.appointmentTime],
         );
 
-        const overlappingCount = overlapResult.rows[0].count;
+        const overlappingCount = overlapResult.rows.length;
 
         if (overlappingCount >= shop.numberOfBarbers) {
             await client.query('ROLLBACK');
@@ -323,318 +323,318 @@ async function getBarberBooking(barberId: string, bookingId: string) {
 // ─── Confirm Booking ──────────────────────────────────────
 
 export async function confirmBooking(barberId: string, bookingId: string) {
-  const { shop, booking: initialBooking } = await getBarberBooking(barberId, bookingId);
+    const { shop, booking: initialBooking } = await getBarberBooking(barberId, bookingId);
 
-  // Preliminary status check (fast fail before acquiring locks)
-  if (initialBooking.status !== BOOKING_STATUSES.PENDING) {
-    throw new ConflictError(
-      `Cannot confirm a booking that is "${initialBooking.status}". Only pending bookings can be confirmed.`,
-    );
-  }
+    // Preliminary status check (fast fail before acquiring locks)
+    if (initialBooking.status !== BOOKING_STATUSES.PENDING) {
+        throw new ConflictError(
+            `Cannot confirm a booking that is "${initialBooking.status}". Only pending bookings can be confirmed.`,
+        );
+    }
 
-  // Fetch service for price
-  const service = await db.query.services.findFirst({
-    where: eq(services.id, initialBooking.serviceId),
-  });
+    // Fetch service for price
+    const service = await db.query.services.findFirst({
+        where: eq(services.id, initialBooking.serviceId),
+    });
 
-  if (!service) {
-    throw new NotFoundError('Service associated with this booking no longer exists');
-  }
+    if (!service) {
+        throw new NotFoundError('Service associated with this booking no longer exists');
+    }
 
-  const client = await pool.connect();
+    const client = await pool.connect();
 
-  try {
-    await client.query('BEGIN');
+    try {
+        await client.query('BEGIN');
 
-    // Re-check status under lock (prevents double-confirm race condition)
-    const lockResult = await client.query(
-      `SELECT status FROM bookings WHERE id = $1 FOR UPDATE`,
-      [bookingId],
-    );
+        // Re-check status under lock (prevents double-confirm race condition)
+        const lockResult = await client.query(
+            `SELECT status FROM bookings WHERE id = $1 FOR UPDATE`,
+                    [bookingId],
+        );
 
     if (lockResult.rows.length === 0) {
-      await client.query('ROLLBACK');
-      throw new NotFoundError('Booking not found');
+        await client.query('ROLLBACK');
+        throw new NotFoundError('Booking not found');
     }
 
     if (lockResult.rows[0].status !== BOOKING_STATUSES.PENDING) {
-      await client.query('ROLLBACK');
-      throw new ConflictError(
-        `Cannot confirm a booking that is "${lockResult.rows[0].status}". Only pending bookings can be confirmed.`,
-      );
+        await client.query('ROLLBACK');
+        throw new ConflictError(
+            `Cannot confirm a booking that is "${lockResult.rows[0].status}". Only pending bookings can be confirmed.`,
+        );
     }
 
     // 1. Debit customer wallet (re-checks balance under lock)
     await debitWallet(
-      client,
-      initialBooking.customerId,
-      service.price,
-      `Booking payment for ${service.serviceName} at ${shop.shopName}`,
-      initialBooking.id,
+        client,
+        initialBooking.customerId,
+        service.price,
+        `Booking payment for ${service.serviceName} at ${shop.shopName}`,
+        initialBooking.id,
     );
 
     // 2. Credit barber wallet
     await creditWallet(
-      client,
-      shop.barberId,
-      service.price,
-      `Payment received for ${service.serviceName}`,
-      initialBooking.id,
+        client,
+        shop.barberId,
+        service.price,
+        `Payment received for ${service.serviceName}`,
+        initialBooking.id,
     );
 
     // 3. Update booking status
     await client.query(
-      `UPDATE bookings SET status = $1, updated_at = NOW() WHERE id = $2`,
-      [BOOKING_STATUSES.CONFIRMED, initialBooking.id],
+        `UPDATE bookings SET status = $1, updated_at = NOW() WHERE id = $2`,
+            [BOOKING_STATUSES.CONFIRMED, initialBooking.id],
     );
 
     await client.query('COMMIT');
-  } catch (error) {
-    await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    client.release();
-  }
+    } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+    } finally {
+        client.release();
+    }
 
-  // Send confirmation email to customer (fire-and-forget)
-  const customer = await db.query.users.findFirst({
-    where: eq(users.id, initialBooking.customerId),
-  });
+    // Send confirmation email to customer (fire-and-forget)
+    const customer = await db.query.users.findFirst({
+        where: eq(users.id, initialBooking.customerId),
+    });
 
-  if (customer) {
-    const template = bookingConfirmedTemplate(
-      customer.fullName,
-      shop.shopName,
-      service.serviceName,
-      initialBooking.appointmentDate,
-      initialBooking.appointmentTime,
-    );
-    sendEmail({
-      to: customer.email,
-      subject: template.subject,
-      html: template.html,
-    }).catch(() => {});
-  }
+    if (customer) {
+        const template = bookingConfirmedTemplate(
+            customer.fullName,
+            shop.shopName,
+            service.serviceName,
+            initialBooking.appointmentDate,
+            initialBooking.appointmentTime,
+        );
+        sendEmail({
+            to: customer.email,
+            subject: template.subject,
+            html: template.html,
+        }).catch(() => {});
+    }
 
-  // Return updated booking
-  const [updated] = await db
+    // Return updated booking
+    const [updated] = await db
     .select()
     .from(bookings)
     .where(eq(bookings.id, initialBooking.id));
 
-  return formatBookingResponse({
-    id: updated.id,
-    customerId: updated.customerId,
-    shopId: updated.shopId,
-    serviceId: updated.serviceId,
-    appointmentDate: updated.appointmentDate,
-    appointmentTime: updated.appointmentTime,
-    endTime: updated.endTime,
-    status: updated.status,
-    createdAt: updated.createdAt,
-    updatedAt: updated.updatedAt,
-  });
+    return formatBookingResponse({
+        id: updated.id,
+        customerId: updated.customerId,
+        shopId: updated.shopId,
+        serviceId: updated.serviceId,
+        appointmentDate: updated.appointmentDate,
+        appointmentTime: updated.appointmentTime,
+        endTime: updated.endTime,
+        status: updated.status,
+        createdAt: updated.createdAt,
+        updatedAt: updated.updatedAt,
+    });
 }
 
 // ─── Complete Booking ─────────────────────────────────────
 
 export async function completeBooking(barberId: string, bookingId: string) {
-  const { booking: initialBooking } = await getBarberBooking(barberId, bookingId);
+    const { booking: initialBooking } = await getBarberBooking(barberId, bookingId);
 
-  if (initialBooking.status !== BOOKING_STATUSES.CONFIRMED) {
-    throw new ConflictError(
-      `Cannot complete a booking that is "${initialBooking.status}". Only confirmed bookings can be marked complete.`,
-    );
-  }
+    if (initialBooking.status !== BOOKING_STATUSES.CONFIRMED) {
+        throw new ConflictError(
+            `Cannot complete a booking that is "${initialBooking.status}". Only confirmed bookings can be marked complete.`,
+        );
+    }
 
-  const client = await pool.connect();
+    const client = await pool.connect();
 
-  try {
-    await client.query('BEGIN');
+    try {
+        await client.query('BEGIN');
 
-    // Re-check status under lock
-    const lockResult = await client.query(
-      `SELECT status FROM bookings WHERE id = $1 FOR UPDATE`,
-      [bookingId],
-    );
+        // Re-check status under lock
+        const lockResult = await client.query(
+            `SELECT status FROM bookings WHERE id = $1 FOR UPDATE`,
+                    [bookingId],
+        );
 
     if (lockResult.rows.length === 0) {
-      await client.query('ROLLBACK');
-      throw new NotFoundError('Booking not found');
+        await client.query('ROLLBACK');
+        throw new NotFoundError('Booking not found');
     }
 
     if (lockResult.rows[0].status !== BOOKING_STATUSES.CONFIRMED) {
-      await client.query('ROLLBACK');
-      throw new ConflictError(
-        `Cannot complete a booking that is "${lockResult.rows[0].status}". Only confirmed bookings can be marked complete.`,
-      );
+        await client.query('ROLLBACK');
+        throw new ConflictError(
+            `Cannot complete a booking that is "${lockResult.rows[0].status}". Only confirmed bookings can be marked complete.`,
+        );
     }
 
     await client.query(
-      `UPDATE bookings SET status = $1, updated_at = NOW() WHERE id = $2`,
-      [BOOKING_STATUSES.COMPLETED, initialBooking.id],
+        `UPDATE bookings SET status = $1, updated_at = NOW() WHERE id = $2`,
+            [BOOKING_STATUSES.COMPLETED, initialBooking.id],
     );
 
     await client.query('COMMIT');
-  } catch (error) {
-    await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    client.release();
-  }
+    } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+    } finally {
+        client.release();
+    }
 
-  const [updated] = await db
+    const [updated] = await db
     .select()
     .from(bookings)
     .where(eq(bookings.id, initialBooking.id));
 
-  return formatBookingResponse({
-    id: updated.id,
-    customerId: updated.customerId,
-    shopId: updated.shopId,
-    serviceId: updated.serviceId,
-    appointmentDate: updated.appointmentDate,
-    appointmentTime: updated.appointmentTime,
-    endTime: updated.endTime,
-    status: updated.status,
-    createdAt: updated.createdAt,
-    updatedAt: updated.updatedAt,
-  });
+    return formatBookingResponse({
+        id: updated.id,
+        customerId: updated.customerId,
+        shopId: updated.shopId,
+        serviceId: updated.serviceId,
+        appointmentDate: updated.appointmentDate,
+        appointmentTime: updated.appointmentTime,
+        endTime: updated.endTime,
+        status: updated.status,
+        createdAt: updated.createdAt,
+        updatedAt: updated.updatedAt,
+    });
 }
 
 // ─── Cancel Booking (Barber) ──────────────────────────────
 
 export async function cancelBookingByBarber(
-  barberId: string,
-  bookingId: string,
+    barberId: string,
+    bookingId: string,
 ) {
-  const { shop, booking: initialBooking } = await getBarberBooking(barberId, bookingId);
+    const { shop, booking: initialBooking } = await getBarberBooking(barberId, bookingId);
 
-  if (
-    initialBooking.status !== BOOKING_STATUSES.PENDING &&
-    initialBooking.status !== BOOKING_STATUSES.CONFIRMED
-  ) {
-    throw new ConflictError(
-      `Cannot cancel a booking that is "${initialBooking.status}". Only pending or confirmed bookings can be cancelled.`,
-    );
-  }
+    if (
+        initialBooking.status !== BOOKING_STATUSES.PENDING &&
+        initialBooking.status !== BOOKING_STATUSES.CONFIRMED
+    ) {
+        throw new ConflictError(
+            `Cannot cancel a booking that is "${initialBooking.status}". Only pending or confirmed bookings can be cancelled.`,
+        );
+    }
 
-  const client = await pool.connect();
+    const client = await pool.connect();
 
-  try {
-    await client.query('BEGIN');
+    try {
+        await client.query('BEGIN');
 
-    // Re-check status under lock
-    const lockResult = await client.query(
-      `SELECT status FROM bookings WHERE id = $1 FOR UPDATE`,
-      [bookingId],
-    );
+        // Re-check status under lock
+        const lockResult = await client.query(
+            `SELECT status FROM bookings WHERE id = $1 FOR UPDATE`,
+                    [bookingId],
+        );
 
     if (lockResult.rows.length === 0) {
-      await client.query('ROLLBACK');
-      throw new NotFoundError('Booking not found');
+        await client.query('ROLLBACK');
+        throw new NotFoundError('Booking not found');
     }
 
     const currentStatus = lockResult.rows[0].status;
 
     if (
-      currentStatus !== BOOKING_STATUSES.PENDING &&
-      currentStatus !== BOOKING_STATUSES.CONFIRMED
+        currentStatus !== BOOKING_STATUSES.PENDING &&
+        currentStatus !== BOOKING_STATUSES.CONFIRMED
     ) {
-      await client.query('ROLLBACK');
-      throw new ConflictError(
-        `Cannot cancel a booking that is "${currentStatus}". Only pending or confirmed bookings can be cancelled.`,
-      );
+        await client.query('ROLLBACK');
+        throw new ConflictError(
+            `Cannot cancel a booking that is "${currentStatus}". Only pending or confirmed bookings can be cancelled.`,
+        );
     }
 
     const wasConfirmed = currentStatus === BOOKING_STATUSES.CONFIRMED;
 
     if (wasConfirmed) {
-      const service = await db.query.services.findFirst({
-        where: eq(services.id, initialBooking.serviceId),
-      });
+        const service = await db.query.services.findFirst({
+            where: eq(services.id, initialBooking.serviceId),
+        });
 
-      if (!service) {
-        await client.query('ROLLBACK');
-        throw new NotFoundError('Service associated with this booking no longer exists');
-      }
+        if (!service) {
+            await client.query('ROLLBACK');
+            throw new NotFoundError('Service associated with this booking no longer exists');
+        }
 
-      // Debit barber wallet (return money)
-      await debitWallet(
-        client,
-        shop.barberId,
-        service.price,
-        `Refund for cancelled booking - ${service.serviceName}`,
-        initialBooking.id,
-      );
+        // Debit barber wallet (return money)
+        await debitWallet(
+            client,
+            shop.barberId,
+            service.price,
+            `Refund for cancelled booking - ${service.serviceName}`,
+            initialBooking.id,
+        );
 
-      // Credit customer wallet (refund)
-      await creditWallet(
-        client,
-        initialBooking.customerId,
-        service.price,
-        `Refund for cancelled booking at ${shop.shopName} - ${service.serviceName}`,
-        initialBooking.id,
-      );
+        // Credit customer wallet (refund)
+        await creditWallet(
+            client,
+            initialBooking.customerId,
+            service.price,
+            `Refund for cancelled booking at ${shop.shopName} - ${service.serviceName}`,
+            initialBooking.id,
+        );
     }
 
     // Update booking status
     await client.query(
-      `UPDATE bookings SET status = $1, updated_at = NOW() WHERE id = $2`,
-      [BOOKING_STATUSES.CANCELLED, initialBooking.id],
+        `UPDATE bookings SET status = $1, updated_at = NOW() WHERE id = $2`,
+            [BOOKING_STATUSES.CANCELLED, initialBooking.id],
     );
 
     await client.query('COMMIT');
 
     // Send cancellation email (fire-and-forget)
     const customer = await db.query.users.findFirst({
-      where: eq(users.id, initialBooking.customerId),
+        where: eq(users.id, initialBooking.customerId),
     });
 
     const service = await db.query.services.findFirst({
-      where: eq(services.id, initialBooking.serviceId),
+        where: eq(services.id, initialBooking.serviceId),
     });
 
     if (customer && service) {
-      const template = bookingCancelledTemplate(
-        customer.fullName,
-        shop.shopName,
-        service.serviceName,
-        initialBooking.appointmentDate,
-        initialBooking.appointmentTime,
-        wasConfirmed,
-      );
-      sendEmail({
-        to: customer.email,
-        subject: template.subject,
-        html: template.html,
-      }).catch(() => {});
+        const template = bookingCancelledTemplate(
+            customer.fullName,
+            shop.shopName,
+            service.serviceName,
+            initialBooking.appointmentDate,
+            initialBooking.appointmentTime,
+            wasConfirmed,
+        );
+        sendEmail({
+            to: customer.email,
+            subject: template.subject,
+            html: template.html,
+        }).catch(() => {});
     }
-  } catch (error) {
-    await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    client.release();
-  }
+    } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+    } finally {
+        client.release();
+    }
 
-  // Return updated booking
-  const [updated] = await db
+    // Return updated booking
+    const [updated] = await db
     .select()
     .from(bookings)
     .where(eq(bookings.id, initialBooking.id));
 
-  return formatBookingResponse({
-    id: updated.id,
-    customerId: updated.customerId,
-    shopId: updated.shopId,
-    serviceId: updated.serviceId,
-    appointmentDate: updated.appointmentDate,
-    appointmentTime: updated.appointmentTime,
-    endTime: updated.endTime,
-    status: updated.status,
-    createdAt: updated.createdAt,
-    updatedAt: updated.updatedAt,
-  });
+    return formatBookingResponse({
+        id: updated.id,
+        customerId: updated.customerId,
+        shopId: updated.shopId,
+        serviceId: updated.serviceId,
+        appointmentDate: updated.appointmentDate,
+        appointmentTime: updated.appointmentTime,
+        endTime: updated.endTime,
+        status: updated.status,
+        createdAt: updated.createdAt,
+        updatedAt: updated.updatedAt,
+    });
 }
 
 // ─── List Barber Bookings ─────────────────────────────────
@@ -735,46 +735,46 @@ export async function getBarberBookings(
 // ─── List Customer Bookings ──────────────────────────────
 
 export async function getCustomerBookings(
-  customerId: string,
-  query: import('./booking.schema').CustomerBookingsQueryInput,
+    customerId: string,
+    query: import('./booking.schema').CustomerBookingsQueryInput,
 ) {
-  // Build conditions
-  const conditions = [eq(bookings.customerId, customerId)];
+    // Build conditions
+    const conditions = [eq(bookings.customerId, customerId)];
 
-  if (query.status) {
-    conditions.push(eq(bookings.status, query.status));
-  }
+    if (query.status) {
+        conditions.push(eq(bookings.status, query.status));
+    }
 
-  // Count total
-  const [countResult] = await db
+    // Count total
+    const [countResult] = await db
     .select({ count: sql<number>`count(*)::int` })
     .from(bookings)
     .where(and(...conditions));
 
-  const total = countResult.count;
+    const total = countResult.count;
 
-  // Fetch paginated bookings with shop + service info
-  const offset = (query.page - 1) * query.limit;
+    // Fetch paginated bookings with shop + service info
+    const offset = (query.page - 1) * query.limit;
 
-  const bookingRows = await db
+    const bookingRows = await db
     .select({
-      id: bookings.id,
-      customerId: bookings.customerId,
-      shopId: bookings.shopId,
-      serviceId: bookings.serviceId,
-      appointmentDate: bookings.appointmentDate,
-      appointmentTime: bookings.appointmentTime,
-      endTime: bookings.endTime,
-      status: bookings.status,
-      createdAt: bookings.createdAt,
-      updatedAt: bookings.updatedAt,
-      shopName: shops.shopName,
-      shopPhone: shops.shopPhoneNumber,
-      shopLat: shops.latitude,
-      shopLng: shops.longitude,
-      serviceName: services.serviceName,
-      servicePrice: services.price,
-      serviceDuration: services.durationMinutes,
+        id: bookings.id,
+        customerId: bookings.customerId,
+        shopId: bookings.shopId,
+        serviceId: bookings.serviceId,
+        appointmentDate: bookings.appointmentDate,
+        appointmentTime: bookings.appointmentTime,
+        endTime: bookings.endTime,
+        status: bookings.status,
+        createdAt: bookings.createdAt,
+        updatedAt: bookings.updatedAt,
+        shopName: shops.shopName,
+        shopPhone: shops.shopPhoneNumber,
+        shopLat: shops.latitude,
+        shopLng: shops.longitude,
+        serviceName: services.serviceName,
+        servicePrice: services.price,
+        serviceDuration: services.durationMinutes,
     })
     .from(bookings)
     .innerJoin(shops, eq(bookings.shopId, shops.id))
@@ -784,143 +784,143 @@ export async function getCustomerBookings(
     .limit(query.limit)
     .offset(offset);
 
-  return {
-    bookings: bookingRows.map((b) => ({
-      id: b.id,
-      appointmentDate: b.appointmentDate,
-      appointmentTime: b.appointmentTime,
-      endTime: b.endTime,
-      status: b.status,
-      createdAt: b.createdAt,
-      updatedAt: b.updatedAt,
-      shop: {
-        id: b.shopId,
-        shopName: b.shopName,
-        shopPhoneNumber: b.shopPhone,
-        latitude: b.shopLat,
-        longitude: b.shopLng,
-      },
-      service: {
-        id: b.serviceId,
-        serviceName: b.serviceName,
-        price: formatMoney(b.servicePrice),
-        durationMinutes: b.serviceDuration,
-      },
-    })),
-    pagination: {
-      page: query.page,
-      limit: query.limit,
-      total,
-      totalPages: Math.ceil(total / query.limit),
-    },
-  };
+    return {
+        bookings: bookingRows.map((b) => ({
+            id: b.id,
+            appointmentDate: b.appointmentDate,
+            appointmentTime: b.appointmentTime,
+            endTime: b.endTime,
+            status: b.status,
+            createdAt: b.createdAt,
+            updatedAt: b.updatedAt,
+            shop: {
+                id: b.shopId,
+                shopName: b.shopName,
+                shopPhoneNumber: b.shopPhone,
+                latitude: b.shopLat,
+                longitude: b.shopLng,
+            },
+            service: {
+                id: b.serviceId,
+                serviceName: b.serviceName,
+                price: formatMoney(b.servicePrice),
+                durationMinutes: b.serviceDuration,
+            },
+        })),
+        pagination: {
+            page: query.page,
+            limit: query.limit,
+            total,
+            totalPages: Math.ceil(total / query.limit),
+        },
+    };
 }
 
 // ─── Get Customer Booking Detail ─────────────────────────
 
 export async function getCustomerBookingDetail(
-  customerId: string,
-  bookingId: string,
+    customerId: string,
+    bookingId: string,
 ) {
-  const bookingRows = await db
+    const bookingRows = await db
     .select({
-      id: bookings.id,
-      customerId: bookings.customerId,
-      shopId: bookings.shopId,
-      serviceId: bookings.serviceId,
-      appointmentDate: bookings.appointmentDate,
-      appointmentTime: bookings.appointmentTime,
-      endTime: bookings.endTime,
-      status: bookings.status,
-      createdAt: bookings.createdAt,
-      updatedAt: bookings.updatedAt,
-      shopName: shops.shopName,
-      shopPhone: shops.shopPhoneNumber,
-      shopLat: shops.latitude,
-      shopLng: shops.longitude,
-      barberName: users.fullName,
-      serviceName: services.serviceName,
-      servicePrice: services.price,
-      serviceDuration: services.durationMinutes,
+        id: bookings.id,
+        customerId: bookings.customerId,
+        shopId: bookings.shopId,
+        serviceId: bookings.serviceId,
+        appointmentDate: bookings.appointmentDate,
+        appointmentTime: bookings.appointmentTime,
+        endTime: bookings.endTime,
+        status: bookings.status,
+        createdAt: bookings.createdAt,
+        updatedAt: bookings.updatedAt,
+        shopName: shops.shopName,
+        shopPhone: shops.shopPhoneNumber,
+        shopLat: shops.latitude,
+        shopLng: shops.longitude,
+        barberName: users.fullName,
+        serviceName: services.serviceName,
+        servicePrice: services.price,
+        serviceDuration: services.durationMinutes,
     })
     .from(bookings)
     .innerJoin(shops, eq(bookings.shopId, shops.id))
     .innerJoin(users, eq(shops.barberId, users.id))
     .innerJoin(services, eq(bookings.serviceId, services.id))
     .where(
-      and(
-        eq(bookings.id, bookingId),
-        eq(bookings.customerId, customerId),
-      ),
+        and(
+            eq(bookings.id, bookingId),
+            eq(bookings.customerId, customerId),
+        ),
     )
     .limit(1);
 
-  if (bookingRows.length === 0) {
-    throw new NotFoundError('Booking not found');
-  }
+    if (bookingRows.length === 0) {
+        throw new NotFoundError('Booking not found');
+    }
 
-  const b = bookingRows[0];
+    const b = bookingRows[0];
 
-  return {
-    id: b.id,
-    appointmentDate: b.appointmentDate,
-    appointmentTime: b.appointmentTime,
-    endTime: b.endTime,
-    status: b.status,
-    createdAt: b.createdAt,
-    updatedAt: b.updatedAt,
-    shop: {
-      id: b.shopId,
-      shopName: b.shopName,
-      shopPhoneNumber: b.shopPhone,
-      latitude: b.shopLat,
-      longitude: b.shopLng,
-    },
-    barber: {
-      fullName: b.barberName,
-    },
-    service: {
-      id: b.serviceId,
-      serviceName: b.serviceName,
-      price: formatMoney(b.servicePrice),
-      durationMinutes: b.serviceDuration,
-    },
-  };
+    return {
+        id: b.id,
+        appointmentDate: b.appointmentDate,
+        appointmentTime: b.appointmentTime,
+        endTime: b.endTime,
+        status: b.status,
+        createdAt: b.createdAt,
+        updatedAt: b.updatedAt,
+        shop: {
+            id: b.shopId,
+            shopName: b.shopName,
+            shopPhoneNumber: b.shopPhone,
+            latitude: b.shopLat,
+            longitude: b.shopLng,
+        },
+        barber: {
+            fullName: b.barberName,
+        },
+        service: {
+            id: b.serviceId,
+            serviceName: b.serviceName,
+            price: formatMoney(b.servicePrice),
+            durationMinutes: b.serviceDuration,
+        },
+    };
 }
 
 // ─── Cancel Booking (Customer) ───────────────────────────
 
 export async function cancelBookingByCustomer(
-  customerId: string,
-  bookingId: string,
+    customerId: string,
+    bookingId: string,
 ) {
-  // Find booking and verify ownership
-  const booking = await db.query.bookings.findFirst({
-    where: and(
-      eq(bookings.id, bookingId),
-      eq(bookings.customerId, customerId),
-    ),
-  });
+    // Find booking and verify ownership
+    const booking = await db.query.bookings.findFirst({
+        where: and(
+            eq(bookings.id, bookingId),
+            eq(bookings.customerId, customerId),
+        ),
+    });
 
-  if (!booking) {
-    throw new NotFoundError('Booking not found');
-  }
+    if (!booking) {
+        throw new NotFoundError('Booking not found');
+    }
 
-  // Customer can only cancel pending bookings
-  if (booking.status !== BOOKING_STATUSES.PENDING) {
-    throw new ConflictError(
-      `Cannot cancel a booking that is "${booking.status}". You can only cancel pending bookings. Contact the barber for confirmed bookings.`,
-    );
-  }
+    // Customer can only cancel pending bookings
+    if (booking.status !== BOOKING_STATUSES.PENDING) {
+        throw new ConflictError(
+            `Cannot cancel a booking that is "${booking.status}". You can only cancel pending bookings. Contact the barber for confirmed bookings.`,
+        );
+    }
 
-  // No money was moved for pending bookings — just update status
-  const [updated] = await db
-    .update(bookings)
-    .set({ status: BOOKING_STATUSES.CANCELLED })
-    .where(eq(bookings.id, booking.id))
-    .returning();
+    // No money was moved for pending bookings — just update status
+    const [updated] = await db
+.update(bookings)
+.set({ status: BOOKING_STATUSES.CANCELLED })
+.where(eq(bookings.id, booking.id))
+.returning();
 
-  return formatBookingResponse({
+return formatBookingResponse({
     id: updated.id,
     customerId: updated.customerId,
     shopId: updated.shopId,
@@ -931,5 +931,5 @@ export async function cancelBookingByCustomer(
     status: updated.status,
     createdAt: updated.createdAt,
     updatedAt: updated.updatedAt,
-  });
+});
 }

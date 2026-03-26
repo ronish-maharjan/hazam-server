@@ -1,28 +1,22 @@
 import rateLimit from 'express-rate-limit';
 
 // ─── Login rate limiter ──────────────────────────────────
-// Prevents brute-force password guessing
 export const loginRateLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 10, // 10 attempts per window
+  windowMs: 15 * 60 * 1000,
+  max: 10,
   standardHeaders: true,
   legacyHeaders: false,
   message: {
     success: false,
     message: 'Too many login attempts. Please try again after 15 minutes.',
   },
-  keyGenerator: (req) => {
-    // Rate limit by IP + email combination
-    const email = req.body?.email || 'unknown';
-    return `${req.ip}-${email}`;
-  },
+  // No custom keyGenerator — uses default IP-based key which handles IPv6 correctly
 });
 
 // ─── General API rate limiter ────────────────────────────
-// Prevents abuse of all endpoints
 export const apiRateLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 200, // 200 requests per window per IP
+  windowMs: 15 * 60 * 1000,
+  max: 200,
   standardHeaders: true,
   legacyHeaders: false,
   message: {
@@ -32,7 +26,6 @@ export const apiRateLimiter = rateLimit({
 });
 
 // ─── Strict rate limiter for sensitive operations ────────
-// Coupon redemption, password change
 export const strictRateLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 5,
