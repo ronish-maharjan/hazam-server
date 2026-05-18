@@ -31,23 +31,6 @@ export const BOOKING_STATUS_VALUES: [BookingStatus, ...BookingStatus[]] = [
   BOOKING_STATUSES.CANCELLED,
 ];
 
-// ─── Coupon ───────────────────────────────────────────────
-export const COUPON_STATUSES = {
-  UNUSED: 'unused',
-  REDEEMED: 'redeemed',
-} as const;
-
-export type CouponStatus =
-  (typeof COUPON_STATUSES)[keyof typeof COUPON_STATUSES];
-
-export const COUPON_STATUS_VALUES: [CouponStatus, ...CouponStatus[]] = [
-  COUPON_STATUSES.UNUSED,
-  COUPON_STATUSES.REDEEMED,
-];
-
-export const COUPON_DENOMINATIONS = [50, 100, 500] as const;
-export type CouponDenomination = (typeof COUPON_DENOMINATIONS)[number];
-
 // ─── Wallet ───────────────────────────────────────────────
 export const WALLET_TX_TYPES = {
   CREDIT: 'credit',
@@ -61,6 +44,29 @@ export const WALLET_TX_TYPE_VALUES: [WalletTxType, ...WalletTxType[]] = [
   WALLET_TX_TYPES.CREDIT,
   WALLET_TX_TYPES.DEBIT,
 ];
+
+// ─── Payment Statuses ─────────────────────────────────────
+export const PAYMENT_STATUSES = {
+  PENDING: 'pending',
+  COMPLETED: 'completed',
+  FAILED: 'failed',
+  EXPIRED: 'expired',
+} as const;
+
+export type PaymentStatus =
+  (typeof PAYMENT_STATUSES)[keyof typeof PAYMENT_STATUSES];
+
+export const PAYMENT_STATUS_VALUES: [PaymentStatus, ...PaymentStatus[]] = [
+  PAYMENT_STATUSES.PENDING,
+  PAYMENT_STATUSES.COMPLETED,
+  PAYMENT_STATUSES.FAILED,
+  PAYMENT_STATUSES.EXPIRED,
+];
+
+// ─── Payment Limits ───────────────────────────────────────
+export const MIN_PAYMENT_AMOUNT = 50;
+export const MAX_PAYMENT_AMOUNT = 10000;
+export const PAYMENT_EXPIRY_MINUTES = 30;
 
 // ─── Verification Codes ───────────────────────────────────
 export const VERIFICATION_CODE_TYPES = {

@@ -7,7 +7,7 @@ export {
 export { refreshTokens } from './refresh-tokens';
 export { wallets } from './wallets';
 export { walletTransactions, walletTxTypeEnum } from './wallet-transactions';
-export { coupons, couponStatusEnum } from './coupons';
+export { payments, paymentStatusEnum } from './payments';
 export { shops } from './shops';
 export type { WorkingHours, DayHours } from './shops';
 export { services } from './services';
@@ -21,7 +21,7 @@ export {
   refreshTokensRelations,
   walletsRelations,
   walletTransactionsRelations,
-  couponsRelations,
+  paymentsRelations,
   shopsRelations,
   servicesRelations,
   bookingsRelations,

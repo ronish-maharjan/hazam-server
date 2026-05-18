@@ -1,18 +1,10 @@
 import { eq, and, desc, sql } from 'drizzle-orm';
 import { db } from '../../config/database';
 import { pool } from '../../config/database';
-import {
-  wallets,
-  walletTransactions,
-  coupons,
-} from '../../db/schema/index';
-import {
-  COUPON_STATUSES,
-  WALLET_TX_TYPES,
-} from '../../config/constants';
+import { wallets, walletTransactions } from '../../db/schema/index';
+import { WALLET_TX_TYPES } from '../../config/constants';
 import {
   NotFoundError,
-  ConflictError,
   PaymentRequiredError,
 } from '../../errors/index';
 import {
@@ -21,7 +13,7 @@ import {
   isGreaterThanOrEqual,
   formatMoney,
 } from '../../utils/decimal';
-import type { RedeemCouponInput, WalletTransactionsQueryInput } from './wallet.schema';
+import type { WalletTransactionsQueryInput } from './wallet.schema';
 
 // ─── Get Wallet Balance ───────────────────────────────────
 
@@ -107,101 +99,7 @@ export async function getWalletTransactions(
   };
 }
 
-// ─── Redeem Coupon ────────────────────────────────────────
-
-export async function redeemCoupon(userId: string, input: RedeemCouponInput) {
-  const client = await pool.connect();
-
-  try {
-    await client.query('BEGIN');
-
-    // 1. Lock the coupon row (prevent double redemption)
-    const couponResult = await client.query(
-      `SELECT id, code, denomination, status, redeemed_by
-       FROM coupons
-       WHERE code = $1
-       FOR UPDATE`,
-      [input.code],
-    );
-
-    if (couponResult.rows.length === 0) {
-      await client.query('ROLLBACK');
-      throw new NotFoundError('Coupon not found');
-    }
-
-    const coupon = couponResult.rows[0];
-
-    if (coupon.status === COUPON_STATUSES.REDEEMED) {
-      await client.query('ROLLBACK');
-      throw new ConflictError('Coupon has already been redeemed');
-    }
-
-    // 2. Lock the wallet row
-    const walletResult = await client.query(
-      `SELECT id, balance
-       FROM wallets
-       WHERE user_id = $1
-       FOR UPDATE`,
-      [userId],
-    );
-
-    if (walletResult.rows.length === 0) {
-      await client.query('ROLLBACK');
-      throw new NotFoundError('Wallet not found');
-    }
-
-    const wallet = walletResult.rows[0];
-    const currentBalance = wallet.balance;
-    const creditAmount = formatMoney(String(coupon.denomination));
-    const newBalance = addMoney(currentBalance, creditAmount);
-
-    // 3. Update wallet balance
-    await client.query(
-      `UPDATE wallets SET balance = $1, updated_at = NOW() WHERE id = $2`,
-      [newBalance, wallet.id],
-    );
-
-    // 4. Mark coupon as redeemed
-    await client.query(
-      `UPDATE coupons
-       SET status = $1, redeemed_by = $2, redeemed_at = NOW()
-       WHERE id = $3`,
-      [COUPON_STATUSES.REDEEMED, userId, coupon.id],
-    );
-
-    // 5. Log wallet transaction
-    await client.query(
-      `INSERT INTO wallet_transactions
-       (wallet_id, type, amount, description, reference_id, balance_before, balance_after)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [
-        wallet.id,
-        WALLET_TX_TYPES.CREDIT,
-        creditAmount,
-        `Coupon redemption ${coupon.code}`,
-        coupon.id,
-        currentBalance,
-        newBalance,
-      ],
-    );
-
-    await client.query('COMMIT');
-
-    return {
-      couponCode: coupon.code,
-      denomination: coupon.denomination,
-      creditedAmount: creditAmount,
-      newBalance,
-    };
-  } catch (error) {
-    await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    client.release();
-  }
-}
-
-// ─── Credit Wallet (used by booking service) ──────────────
+// ─── Credit Wallet (used by booking service + payment service) ─
 
 export async function creditWallet(
   client: import('pg').PoolClient,

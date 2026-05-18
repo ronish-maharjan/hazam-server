@@ -12,6 +12,7 @@ import { apiRateLimiter } from './middleware/rate-limit';
 import authRoutes from './modules/auth/auth.routes';
 import profileRoutes from './modules/profile/profile.routes';
 import walletRoutes from './modules/wallet/wallet.routes';
+import paymentRoutes from './modules/payment/payment.routes'; // ✅ NEW
 import adminRoutes from './modules/admin/admin.routes';
 import shopRoutes from './modules/shop/shop.routes';
 import barberBookingRoutes from './modules/booking/barber-booking.routes';
@@ -37,7 +38,6 @@ app.use(express.urlencoded({ extended: false }));
 app.use('/api', apiRateLimiter);
 
 // ─── Health check ─────────────────────────────────────────
-// ─── Health check ─────────────────────────────────────────
 app.get('/api/health', (_req, res) => {
   sendSuccess(
     res,
@@ -50,6 +50,7 @@ app.get('/api/health', (_req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/profile', profileRoutes);
 app.use('/api/wallet', walletRoutes);
+app.use('/api/payments', paymentRoutes); // ✅ NEW
 app.use('/api/admin', adminRoutes);
 app.use('/api/barber', shopRoutes);
 app.use('/api/barber/bookings', barberBookingRoutes);

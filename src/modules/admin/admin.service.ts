@@ -1,120 +1,8 @@
 import { eq, and, sql, desc } from 'drizzle-orm';
 import { db } from '../../config/database';
-import {
-  coupons,
-  users,
-  bookings,
-  walletTransactions,
-} from '../../db/schema/index';
-import { generateCouponCode } from '../../utils/coupon-code';
+import { users, bookings, walletTransactions, payments } from '../../db/schema/index';
 import { formatMoney } from '../../utils/decimal';
-import type {
-  GenerateCouponsInput,
-  ListCouponsQueryInput,
-  ListUsersQueryInput,
-} from './admin.schema';
-import type { CouponStatus } from '../../config/constants';
-
-// ─── Generate Coupon Batch ────────────────────────────────
-
-export async function generateCoupons(input: GenerateCouponsInput) {
-  const generatedCodes: string[] = [];
-  const maxRetries = 3;
-
-  for (let i = 0; i < input.quantity; i++) {
-    let code = '';
-    let inserted = false;
-
-    for (let attempt = 0; attempt < maxRetries; attempt++) {
-      code = generateCouponCode();
-
-      try {
-        await db.insert(coupons).values({
-          code,
-          denomination: input.denomination,
-        });
-
-        inserted = true;
-        break;
-      } catch (error) {
-        // Unique constraint violation — retry with a new code
-        const pgError = error as { code?: string };
-        if (pgError.code === '23505') {
-          continue;
-        }
-        throw error;
-      }
-    }
-
-    if (!inserted) {
-      throw new Error(
-        `Failed to generate unique coupon code after ${maxRetries} attempts`,
-      );
-    }
-
-    generatedCodes.push(code);
-  }
-
-  return {
-    denomination: input.denomination,
-    quantity: generatedCodes.length,
-    codes: generatedCodes,
-  };
-}
-
-// ─── List Coupons ─────────────────────────────────────────
-
-export async function listCoupons(query: ListCouponsQueryInput) {
-  // Build conditions
-  const conditions = [];
-
-  if (query.status) {
-    conditions.push(eq(coupons.status, query.status as CouponStatus));
-  }
-
-  if (query.denomination) {
-    conditions.push(eq(coupons.denomination, query.denomination));
-  }
-
-  const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
-
-  // Count total
-  const [countResult] = await db
-    .select({ count: sql<number>`count(*)::int` })
-    .from(coupons)
-    .where(whereClause);
-
-  const total = countResult.count;
-
-  // Fetch paginated
-  const offset = (query.page - 1) * query.limit;
-
-  const couponRows = await db
-    .select({
-      id: coupons.id,
-      code: coupons.code,
-      denomination: coupons.denomination,
-      status: coupons.status,
-      redeemedBy: coupons.redeemedBy,
-      redeemedAt: coupons.redeemedAt,
-      createdAt: coupons.createdAt,
-    })
-    .from(coupons)
-    .where(whereClause)
-    .orderBy(desc(coupons.createdAt))
-    .limit(query.limit)
-    .offset(offset);
-
-  return {
-    coupons: couponRows,
-    pagination: {
-      page: query.page,
-      limit: query.limit,
-      total,
-      totalPages: Math.ceil(total / query.limit),
-    },
-  };
-}
+import type { ListUsersQueryInput } from './admin.schema';
 
 // ─── List Users ───────────────────────────────────────────
 
@@ -186,13 +74,16 @@ export async function getStats() {
     })
     .from(bookings);
 
-  const [couponStats] = await db
+  // ✅ Replaced coupon stats with payment stats
+  const [paymentStats] = await db
     .select({
-      totalCoupons: sql<number>`count(*)::int`,
-      unusedCoupons: sql<number>`count(*) filter (where status = 'unused')::int`,
-      redeemedCoupons: sql<number>`count(*) filter (where status = 'redeemed')::int`,
+      totalPayments: sql<number>`count(*)::int`,
+      completedPayments: sql<number>`count(*) filter (where status = 'completed')::int`,
+      pendingPayments: sql<number>`count(*) filter (where status = 'pending')::int`,
+      failedPayments: sql<number>`count(*) filter (where status = 'failed')::int`,
+      totalAmountLoaded: sql<string>`coalesce(sum(amount) filter (where status = 'completed'), 0)`,
     })
-    .from(coupons);
+    .from(payments);
 
   const [txStats] = await db
     .select({
@@ -204,7 +95,10 @@ export async function getStats() {
   return {
     users: userStats,
     bookings: bookingStats,
-    coupons: couponStats,
+    payments: {
+      ...paymentStats,
+      totalAmountLoaded: formatMoney(paymentStats.totalAmountLoaded),
+    },
     transactions: {
       totalCredits: formatMoney(txStats.totalCredits),
       totalDebits: formatMoney(txStats.totalDebits),

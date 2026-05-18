@@ -32,6 +32,13 @@ const envSchema = z.object({
   GOOGLE_CALLBACK_URL: z.string().url(),
 
   FRONTEND_URL: z.string().url(),
+
+  // ─── eSewa Payment Gateway ──────────────────────────────
+  ESEWA_MERCHANT_CODE: z.string().min(1, 'ESEWA_MERCHANT_CODE is required'),
+  ESEWA_SECRET_KEY: z.string().min(1, 'ESEWA_SECRET_KEY is required'),
+  ESEWA_PAYMENT_URL: z.string().url('ESEWA_PAYMENT_URL must be a valid URL'),
+  ESEWA_STATUS_API: z.string().url('ESEWA_STATUS_API must be a valid URL'),
+  BACKEND_URL: z.string().url('BACKEND_URL is required for eSewa callbacks'),
 });
 
 const parsed = envSchema.safeParse(process.env);
